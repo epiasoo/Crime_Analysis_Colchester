@@ -1,0 +1,336 @@
+---
+title: "MA304_2412690"
+author: "Ei Phyu Sin Oo"
+date: "2025-07-14"
+output:
+  bookdown::html_document2:
+    theme: united
+    df_print: paged
+bibliography: references.bib
+link-citations: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## Introduction
+
+Nowadays, there are many causes of crime and the knowledge of these causes set the basis of setting preventive measures and policing. In the given project, crime data in Colchester in the years 2024 and 2025 are studied and the correlation between the crime rates and weather conditions is investigated. The patterns of criminal behavior and the way that the environmental factors such as temperature, precipitation, and wind could affect them are discussed with the help of street-level crime reports data and daily weather data obtained in a local weather station.
+
+To identify such patterns and offer some insights concerning how the crime landscape in Colchester changes depending on the particular weather conditions, this report combines the statistical graphics, interactive visualizations, and geographic plots.
+
+
+```{r, echo=FALSE}
+#load libraries
+
+library(tidyverse)
+library(lubridate)
+library(DT)
+library(plotly)
+library(leaflet)
+library(ggthemes)
+library(heatmaply)
+library(tm)
+library(wordcloud)
+library(RColorBrewer)
+library(tidyr)
+library(tidyverse)
+library(knitr)
+```
+
+```{r, echo=FALSE, include=FALSE}
+#import datasets
+crime <- read.csv("D:/Study/Essex/Data Visualization/Assignment/crime2024-25.csv")
+weather_24 <- read.csv("D:/Study/Essex/Data Visualization/Assignment/temp2024-25.csv")
+weather_23 <- read.csv("D:/Study/Essex/Data Visualization/Assignment/temp2023-24.csv")
+
+glimpse(crime)
+glimpse(weather_24)
+glimpse(weather_23)
+```
+
+## Data Cleaning
+
+In order to be ready to be analysed, the crime and weather datasets were cleaned and transformed. Cleaning of the crime data was done to make it consistent and relevant to be analyzed. Columns with names that are not easily understood were renamed to be more readable and standardized e.g category renamed to crime_type, lat to latitude and long renamed to longitude. The date started in a YYYY-MM format, that was turned into a complete date, by adding -01 to every record, this way deleting the possible problem of not having a complete date and thus being unable to handle dates and plot time series. The type of the crime was also changed to title case to be consistent, and only the appropriate variables (date, crime_type, latitude, longitude, street_name, and outcome_status) were kept. To provide the correct geospatial analysis, all the rows where the latitude or longitude value is empty were deleted.
+
+Similarly, the weather datasets for 2023–2024 and 2024–2025 underwent structured cleaning using a custom function. This purpose shortened long variable names (e.g, TemperatureCAvg to tavg, Precmm to precipitation), converted the string-formatted dates to Date objects, and extracted only the most climatologically interesting variables within the dataset (e.g, temperature, humidity, wind speed, rainfall, sunshine, cloud cover). Using the same process of cleaning data in both years, we were able to have the same format and structure between datasets. Moreover, daily crime counts were then aggregated and merged with the related weather data based on dates, to get a combined dataset that connects weather data with daily frequency of crime, so as to be used in its entirety and consistencies to provide additional analysis.
+
+
+```{r, echo=FALSE, include=FALSE}
+
+#crime data cleaning
+crime_clean <- crime %>%
+  rename(
+    crime_type = category,
+    latitude = lat,
+    longitude = long,
+    date_month = date
+  ) %>%
+  mutate(
+    date = as.Date(paste0(date_month, "-01")),
+    crime_type = str_to_title(crime_type)
+  ) %>%
+  select(date, crime_type, latitude, longitude, street_name, outcome_status) %>%
+  drop_na(latitude, longitude)
+
+glimpse(crime_clean)
+
+
+#weather data cleaning
+clean_weather <- function(df) {
+  df %>%
+    rename(
+      date = Date,
+      tavg = TemperatureCAvg,
+      tmax = TemperatureCMax,
+      tmin = TemperatureCMin,
+      humidity = HrAvg,
+      wind_dir = WindkmhDir,
+      wind_speed = WindkmhInt,
+      wind_gust = WindkmhGust,
+      pressure = PresslevHp,
+      precipitation = Precmm,
+      cloud_total = TotClOct,
+      cloud_low = lowClOct,
+      sunshine = SunD1h,
+      visibility = VisKm
+    ) %>%
+    mutate(date = as.Date(date)) %>%
+    select(date, tavg, tmin, tmax, humidity, wind_speed, wind_gust,
+           precipitation, sunshine, visibility, cloud_total, cloud_low)
+}
+
+weather24_clean <- clean_weather(weather_24)
+weather23_clean <- clean_weather(weather_23)
+
+# daily aggregation
+daily_crime <- crime_clean %>%
+  group_by(date) %>%
+  summarise(daily_crimes = n())
+
+# merge with weather
+crime_weather <- daily_crime %>%
+  left_join(weather24_clean, by = "date") %>%
+  drop_na()
+```
+
+
+## Crime Dataset Analysis
+### Bar plot: Reported Crime Types 
+
+```{r, echo=FALSE, fig.width=5, fig.height=4}
+crime_summary <- crime_clean %>%
+  count(crime_type, sort = TRUE) %>%
+  rename(frequency = n)
+
+datatable(crime_summary, options = list(pageLength = 10), caption = "Crime Type Frequency")
+```
+
+```{r, fig-crime-barplot, fig.cap="Frequency of Crime Types", echo=FALSE}
+
+ggplot(crime_summary, aes(x = reorder(crime_type, frequency), y = frequency)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Reported Crime Types", x = "Crime Type", y = "Frequency") +
+  theme_minimal()
+```
+
+The table and bar plot of reported crime types in Colchester (2024–25) in (**Figure \@ref(fig:fig-crime-barplot)**) indicate that Violent Crime is, undoubtedly, the most popular one, with more than twice as many crimes, compared to next category. There is also prevalence of Anti-Social Behaviour and Shoplifting, which shows that there is a general disturbance of the people and the property crimes. The categories of mid range, i.e., Criminal Damage & Arson, Public Order and Other Theft propose a stable presence of disorderly and enterprising crime. Robbery, Theft of the Person, and Possession of Weapons are not as common and can be found only a few times. On the whole, the distribution can indicate that the local crime landscape is dominated by violent and antisocial crimes, which can be seen as important focus areas of the targeted policing and community safety activities.
+
+### Piechart: Crime Outcomes
+```{r, fig-piechart-outcomes, fig.cap="Crime Outcomes", echo=FALSE}
+outcomes <- crime_clean %>%
+  mutate(outcome = ifelse(outcome_status == "" | is.na(outcome_status), "Unknown", outcome_status)) %>%
+  count(outcome)
+
+ggplot(outcomes, aes(x = "", y = n, fill = outcome)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y") +
+  labs(title = "Crime Outcomes") +
+  theme_void()
+
+```
+The pie chart as shown in (**Figure \@ref(fig:fig-piechart-outcomes)**) interprets the pattern of the outcomes of reported crimes in Colchester, during 2024 and 2025. The largest segment is the ones that are labeled as "Investigation complete; no suspect identified," where most in-investigations did not have an answer. A large percentage of cases also are labeled as "Under investigation," where presumably there is a backlog or still enquiries taking place. It is important to note that the non-insignificant proportion is classified with the label of the Unknown and this stresses on the problem of data reporting or subsequent monitoring. Other outcomes such as "Awaiting court outcome" or "Formal action is not in the public interest" occur less frequently but still reflect the diversity in how cases are processed. As a whole, the chart highlights that most of the crimes reported do not lead to the solution of finding a suspect, or are left unsolved, thus showing the possible issues with the closure of the case and its continuation.
+
+### Violin Plot: Daily Crime Spread
+```{r fig-daily-crime, fig.cap="Violin Plot of Daily Crime Spread", fig.width=5, fig.height=4, echo=FALSE}
+ggplot(crime_weather, aes(y = daily_crimes, x = "")) +
+  geom_violin(fill = "lightcoral") +
+  labs(title = "Daily Crime Spread", x = "", y = "Crimes") +
+  theme_minimal()
+```
+In **Figure \@ref(fig:fig-daily-crime)** shown in above, a violin plot is used to determine the distribution and dispersion of the number of crimes per day in Colchester within the study period. The widest part of the plot about 480 to 520 crimes shows the most popular crime numbers per day. It is quite symmetrical in shape, implying that the distribution of the daily counts of crime is quite balanced, with no particular skewing towards large or low counts. The tapered tails revealed that few days are extreme (more than 600 or less than 430) in terms of the amount of crime. In general, this visualization shows that there had been always a certain range around which the daily crime rates were concentrated, with only some sparse cases being either above-average or below-average. It strengthens the idea that occurrence of crime in Colchester has a diagonal daily routine within the year.
+
+### Time Series: Monthly Crime Trend
+```{r fig-monthly-crime, fig.cap="Time Series of Monthly Crime Trend", echo=FALSE, fig.width=5, fig.height=3}
+monthly <- crime_clean %>%
+  mutate(month = floor_date(date, "month")) %>%
+  count(month)
+
+ggplot(monthly, aes(x = month, y = n)) +
+  geom_line(color = "firebrick") +
+  geom_smooth(method = "loess", se = FALSE, color = "black") +
+  labs(title = "Monthly Crime Trend with LOESS Smoothing", x = "Month", y = "Crimes") +
+  theme_minimal()
+
+```
+This line plot in **Figure \@ref(fig:fig-monthly-crime)** illustrates the monthly trend in reported crimes in Colchester from April 2024 to early 2025. The red line indicates the actual number of crimes in a month whereas the black curve indicates a LOESS smoothing line, which captures on the large scale by removing any short-term variations. The trend indicates that crime rates are observed to be higher in the summer especially in the month of July when they are highest in July of 2024, and afterward, it drops slowly towards fall and winter months with the lowest point recorded in January 2025. This seasonal effect implies that the amount of crime increases in summer and decreases in winters, which most likely is related to the shift in the outdoor activity rate as well as the social behavior and the occurrence of public events.
+
+### Map of Crime Locations
+
+```{r, fig-map-crime, fig.cap="Map of Crime Locations", echo=FALSE}
+leaflet(crime_clean) %>%
+  addTiles() %>%
+  addCircleMarkers(lng = ~longitude, lat = ~latitude, radius = 2,
+                   popup = ~paste(crime_type, street_name),
+                   color = "red", fillOpacity = 0.5)
+
+```
+**Figure \@ref(fig:fig-map-crime)** is an interactive leaflet map which, shows the spatial distribution of reported crimes within the Colchester in the 2024-2025. Every red dot represents the place where a crime happened and is plotted in its latitude and longitude coordinates. The markers in the central parts of Colchester, especially near the town, as well as in Lexden and Hythe, are clustered together meaning that these are hotspots of criminal activity, probably due to an increased population, shopping, and accessible area to people. Conversely, peripheral neighborhoods are less likely to encounter such incidents showing low incidences of reported crimes. This map could be a very good geographic representation, as interactive zooms and pop-ups with crime type and street names can be used to identify areas where specific enforcement of law or community safety would be required.
+
+
+### Word Cloud: Crime Street Names
+```{r, fig-wordcloud-crime-street, fig.cap="Word Cloud of Crime Street Names", echo=FALSE, fig.width=5, fig.height=3}
+street_words <- Corpus(VectorSource(crime_clean$street_name))
+street_words <- tm_map(street_words, content_transformer(tolower)) %>%
+  tm_map(removePunctuation) %>%
+  tm_map(removeNumbers) %>%
+  tm_map(removeWords, stopwords("en"))
+
+wordcloud(street_words, max.words = 100, random.order = FALSE, colors = brewer.pal(8, "Dark2"))
+```
+
+The word cloud shown in **Figure \@ref(fig:fig-wordcloud-crime-street)** maps the most common words in the list of the street names where there have been reports on crimes in Colchester in 2024-2025. The bigger words refer to higher frequences in the data collection. The word, that stands out the most, is the word, near, which means that a lot of the crime locations were documented as a reference to e.g. landmarks or being nearby (e.g. near supermarket or near station). Other common words that have been observed are road, street, area, supermarket, shopping, and station which indicates that a crime was normally committed in a public space or in business premises. The presence of such terms as nightclub, parking, church, and centre also shows that hotspots of crimes are gathered in city centres and other crowded areas with high store of traffic or social life. This visualization offers a qualitative understanding of crime location, enhancing what its already observed in the leaflet map and putting more details regarding the open spaces of the sorts that may need closer attention or crime prevention.
+
+## Temperature Datasets Analysis
+### Compare Weather across two years
+
+```{r fig-temp-comparison, fig.cap="Average Temperature Comparison (2023–2025)", echo=FALSE}
+
+weather_all_year <- bind_rows(
+  weather23_clean %>% mutate(year = "2023–2024"),
+  weather24_clean %>% mutate(year = "2024–2025")
+)
+
+ggplot(weather_all_year, aes(x = date, y = tavg, color = year)) +
+  geom_line(alpha = 0.6) +
+  labs(title = "Average Temperature Comparison (2023–2025)",
+       x = "Date", y = "Average Temperature") +
+  theme_minimal()
+
+```
+
+**Figure \@ref(fig:fig-temp-comparison)** compares average temperatures of two verticals, 2023-2024 and 2024 -2025 between July (the summer) and January (the winter), reflecting a distinct seasonal peak in July and a trough in January as would be expected in the Northern Hemisphere. The 2024–2025 line consistently runs higher than 2023–2024, which means that average temperatures in corresponding months of 2024 are warmer in comparison with 2023, whereas July 2024 is warmer than July 2023 and January 2025 is warmer than January 2024. To sum up, it means that the period of 2024-2025 was generally warmer than the previous one (2023-2024) when measured over the same months (July to January) and that the temperature during the summer and winter were higher in the second year. This may have a great implication on climate analysis should the trend persist.
+
+
+### Density plot of Average Temperature for both years
+```{r fig-avg-temp, fig.cap="Average Temperature of both years", fig.width=5, fig.height=3, echo=FALSE}
+all_weather <- bind_rows(weather23_clean, weather24_clean)
+ggplot(all_weather, aes(x = tavg)) +
+  geom_density(fill = "lightblue") +
+  labs(x = "Temperature", y = "Density") +
+  theme_minimal()
+
+```
+
+The density plot of the average daily temperatures in both years 2023-2024 and 2024-2025 in **Figure \@ref(fig:fig-avg-temp)** shows that the average temperature was moderate on most days in Colchester, with the temperatures most frequently ranged between 10°C and 15°C, where the curve is highest. At about 5°C there is a noticeable increasing trend and it is easy to see that there were quite a number of colder days, whereas after 18°C the distribution gradually declines on the right indicating that there were warmer days with fewer occasions. The figure of the curve obtained is slightly left-skewed with a high dispersion of mild and warm temperature values than cold ones. Therefore, this plot can give a good overview of the overall weather situation in the two years.
+
+### Pairwise Correlation of Weather Variables
+
+```{r fig-weather-corr, fig.cap="Interactive Correlation of Weather Variables",echo=FALSE}
+weather_all <- bind_rows(weather23_clean, weather24_clean)
+weather_corr_all <- weather_all %>%
+  select(-date) %>%
+  mutate(across(everything(), as.numeric)) %>%
+  drop_na()
+
+# Correlation heatmap
+heatmaply_cor(
+  cor(weather_corr_all),
+  xlab = "Variables", ylab = "Variables",
+  main = "Correlation Matrix of Weather Variables (2023–2025)",
+  colors = colorRampPalette(c("white", "blue"))(100)
+)
+```
+
+**Figure \@ref(fig:fig-weather-corr)** shows the interactive correlation matrix indicating the relationship between the most crucial factors of weather in Colchester between 2023 and 2025.  As is usual, the temperature variables tmin, tavg and tmax-are highly correlated positively with one another (darkest blue) confirming that minimum, average and maximum temperatures  do tend to increase or drop simultaneously.
+
+The sunshine shows positive relationship with the visibility, and negative relationship to cloud factors (cloud_total, cloud_low) and humidity, indicating clearer and drier skies when there is sunshine. Similarly, precipitation is also moderately negatively correlated with sunshine and visibility implying that rainy days are more cloudy and opaque.
+
+Wind-related variables (wind_speed, wind_gust) are tightly related among themselves, however, have weaker relationships with other features. The things that are similar are shown in hierarchical clustering (tree branches) in each of the two axes, which gives further confirmations of the similarities among the variables in graphical form, such as the close clustering among sunshine, temperature and visibility.
+
+Overall, this matrix gives a great sense of the internal relationships that exist within weather variables over a period of two years and an understanding that the meteorological behavior expected in Colchester will remain true to its expected behavior.
+
+### Monthly average of Weather Variables (2023-2025)
+
+```{r fig-monthly-avg-weather, fig.cap="Monthly average of Weather Variables (2023-2025)",echo=FALSE}
+monthly_weather <- weather_all_year %>%
+  mutate(month = floor_date(date, "month")) %>%
+  group_by(month) %>%
+  summarise(
+    tavg = mean(tavg, na.rm = TRUE),
+    precipitation = mean(precipitation, na.rm = TRUE),
+    humidity = mean(humidity, na.rm = TRUE),
+    sunshine = mean(sunshine, na.rm = TRUE)
+  ) %>%
+  pivot_longer(-month, names_to = "variable", values_to = "value")
+
+ggplot(monthly_weather, aes(x = month, y = value, color = variable)) +
+  geom_line(size = 1) +
+  labs(title = "Monthly Averages of Weather Variables (2023–2025)",
+       x = "Month", y = "Average Value", color = "Variable") +
+  theme_minimal()
+
+```
+
+This multi line plot in **Figure \@ref(fig:fig-monthly-avg-weather)** is about the average monthly trends of four important weather measurements like temperature (tavg), humidity, precipitation and sunshine can be seen across the combined years of 2023 to 2025, in Colchester. Both sunshine and average temperature hit its peak at the summer months and declines in winter following the normal seasonal behavior of the Northern Hemisphere. The level of humidity is always rather high and drops slightly in the summer and early winter, which is typical of atmospheric weather conditions. The amount of precipitation is somewhat different and more sporadic, with uneven polls indicating separate wet intervals as opposed to a pronounced season.
+
+## Relationship of Temperature Dataset with Crime Dataset
+### Temperature vs. Daily Crime Count
+
+```{r fig-temp-crime, fig.cap="Scatter Plot of Temperature Vs. Daily Crime Count", fig.width=5, fig.height=3, echo=FALSE}
+g <- ggplot(crime_weather, aes(x = tavg, y = daily_crimes)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "darkred") +
+  labs(title = "Scatter Plot: Temperature vs. Daily Crime Count",
+       x = "Average Temperature ", y = "Number of Crimes")
+
+ggplotly(g, height=400, width=600)
+```
+
+The interactive scatter plot in **Figure \@ref(fig:fig-temp-crime)** depicts the dependence of the average daily temperature and the numer of reported crimes in Colchester. The dots indicate the number of days, and this depiction illustrates the changes in the frequency of crime as the temperature changes.  The positive results of the correlation as shown by the upward-sloping linear regression line and the shaded confidence interval imply that there is a positive correlation and thus as average temperature is increasing, the crimes are also likely to increase. Although the data can be changed a bit, this tendency seems to be rather stable as warm days are associated with larger numbers of a crime. The current result is in accordance with existing research on criminology that the higher the temperature the higher the social activity and conflict that may increase the reported cases. [@field1992temperature] It is however noted that this relationship is not linear in every aspect and there can be other variables affecting this relationship and not represented in this plot.
+
+### Crime Count by Temperature Range
+
+```{r, echo=FALSE}
+# Create temperature ranges
+crime_weather_temp <- crime_weather %>%
+  mutate(temp_range = case_when(
+    tavg < 5 ~ "Cold (<5°C)",
+    tavg >= 5 & tavg <= 15 ~ "Mild (5–15°C)",
+    tavg > 15 ~ "Warm (>15°C)"
+  ))
+
+# Summarize crime counts by temp range
+crime_temp_table <- crime_weather_temp %>%
+  group_by(temp_range) %>%
+  summarise(total_crimes = sum(daily_crimes), .groups = 'drop')
+
+crime_temp_table <- crime_temp_table %>%
+  mutate(across(everything(), ~ iconv(.x, from = "", to = "UTF-8")))
+
+# Optional: Convert to table format
+
+kable(crime_temp_table, caption = "Crime Count by Temperature Range")
+
+```
+The data presented in the table above indicate that when it comes to the analysis of crime frequencies in accordance to temperature range, most crimes (3,546 incidents) were committed during moderate weather (5-15 o C), which implies that moderate weather condition might present cases of outdoor activities and social interactions, and thus heighten crime opportunities. On the contrary, there are no extreme temperature categories, probably because of local climate, and both 912 and 1,052 observations present missing values of temperature, which may be caused by either incomplete weather data or incompatible dates in the case of data conjoined. This trend confirms the suggestion that comfortable weather conditions are associated with increased levels of crime, but care should be taken because missing data values are present.
+
+## Conclusion 
+
+In conclusion, the analysis shows that crime in Colchester does rise with warmer and sunnier weather and that violent and anti-social crime becomes most prevalent. Further, weather patterns conformed to the regional pattern, and a positive relationship between temperature and crime indicates that climate may affect crime.
+
+
+
+
